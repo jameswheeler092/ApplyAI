@@ -2,55 +2,46 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { useForm } from 'react-hook-form'
-import { z } from 'zod'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { createClient } from '@/lib/supabase/client'
 
-const signupSchema = z.object({
-  fullName: z.string().min(1, 'Full name is required'),
-  email: z.string().email('Please enter a valid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
-})
-
-type SignupFormData = z.infer<typeof signupSchema>
-
 export default function SignupPage() {
-  const [serverError, setServerError] = useState<string | null>(null)
-  const [emailSent, setEmailSent] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const supabase = createClient()
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<SignupFormData>({
-    resolver: zodResolver(signupSchema),
-  })
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
 
-  async function onSubmit(data: SignupFormData) {
-    setServerError(null)
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.')
+      return
+    }
 
-    const supabase = createClient()
+    setLoading(true)
+    setError(null)
+
     const { error } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
+      email,
+      password,
       options: {
-        data: {
-          full_name: data.fullName,
-        },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        data: { full_name: fullName },
       },
     })
 
     if (error) {
-      setServerError(error.message)
+      setError(error.message)
+      setLoading(false)
       return
     }
 
-    setEmailSent(true)
+    setSubmitted(true)
   }
 
-  if (emailSent) {
+  if (submitted) {
     return (
       <div className="w-full max-w-sm text-center">
         <div className="mb-4 mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
@@ -60,7 +51,7 @@ export default function SignupPage() {
         </div>
         <h1 className="text-2xl font-semibold text-gray-900">Check your email</h1>
         <p className="mt-2 text-sm text-gray-500">
-          We&apos;ve sent a confirmation link to your email address. Click the link to activate your account.
+          We&apos;ve sent a confirmation link to <span className="font-medium text-gray-700">{email}</span>.
         </p>
         <p className="mt-6 text-sm text-gray-500">
           Already confirmed?{' '}
@@ -76,18 +67,15 @@ export default function SignupPage() {
     <div className="w-full max-w-sm">
       <div className="mb-8 text-center">
         <h1 className="text-2xl font-semibold text-gray-900">Create your account</h1>
-        <p className="mt-2 text-sm text-gray-500">
-          Get started with ApplyAI for free
-        </p>
       </div>
 
-      {serverError && (
+      {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {serverError}
+          {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
             Full name
@@ -95,14 +83,13 @@ export default function SignupPage() {
           <input
             id="fullName"
             type="text"
+            required
             autoComplete="name"
-            {...register('fullName')}
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="Jane Doe"
           />
-          {errors.fullName && (
-            <p className="mt-1 text-xs text-red-600">{errors.fullName.message}</p>
-          )}
         </div>
 
         <div>
@@ -112,14 +99,13 @@ export default function SignupPage() {
           <input
             id="email"
             type="email"
+            required
             autoComplete="email"
-            {...register('email')}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="you@example.com"
           />
-          {errors.email && (
-            <p className="mt-1 text-xs text-red-600">{errors.email.message}</p>
-          )}
         </div>
 
         <div>
@@ -129,22 +115,21 @@ export default function SignupPage() {
           <input
             id="password"
             type="password"
+            required
             autoComplete="new-password"
-            {...register('password')}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             placeholder="At least 8 characters"
           />
-          {errors.password && (
-            <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>
-          )}
         </div>
 
         <button
           type="submit"
-          disabled={isSubmitting}
+          disabled={loading}
           className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {isSubmitting ? 'Creating account...' : 'Create account'}
+          {loading ? 'Creating account...' : 'Create account'}
         </button>
       </form>
 
