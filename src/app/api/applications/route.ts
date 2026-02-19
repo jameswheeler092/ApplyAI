@@ -1,105 +1,149 @@
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { type CreateApplicationPayload, type DocumentType } from '@/types'
 
-const createApplicationSchema = z.object({
-  job_title: z.string().min(1, 'Job title is required'),
-  company_name: z.string().min(1, 'Company name is required'),
-  job_description: z.string().min(1, 'Job description is required'),
-  job_url: z.string().url().optional().or(z.literal('')),
-  hiring_manager_name: z.string().optional(),
-  documents_requested: z
-    .array(z.enum(['research', 'cv', 'cover_letter', 'intro_email']))
-    .min(1, 'At least one document type is required'),
-  cover_letter_length: z.enum(['short', 'standard', 'detailed']).optional().default('standard'),
-  cover_letter_max_words: z.number().int().positive().optional(),
-  tone: z.enum(['professional', 'conversational', 'assertive']),
-})
+const FREE_TIER_LIMIT = 5
 
 export async function POST(request: Request) {
   const supabase = await createClient()
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
+  // 1. Authenticate
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (!user || authError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  let body: unknown
+  // 2. Parse and validate body
+  let body: CreateApplicationPayload
   try {
     body = await request.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    return NextResponse.json({ error: 'validation_error', message: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const parsed = createApplicationSchema.safeParse(body)
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
-      { status: 400 }
-    )
+  if (!body.job_title || !body.company_name || !body.job_description || !body.documents_requested?.length) {
+    return NextResponse.json({ error: 'validation_error', message: 'Missing required fields' }, { status: 400 })
   }
 
-  const { data: application, error } = await supabase
+  // 3. Check usage limit
+  const admin = createAdminClient()
+  const period = new Date()
+  period.setDate(1)
+  const periodStr = period.toISOString().split('T')[0] // 'YYYY-MM-01'
+
+  const { data: usage } = await admin
+    .from('usage')
+    .select('applications_generated')
+    .eq('user_id', user.id)
+    .eq('period', periodStr)
+    .single()
+
+  const tier = 'free' // hardcoded for MVP — all users are free tier
+  const usageCount = usage?.applications_generated ?? 0
+
+  if (tier === 'free' && usageCount >= FREE_TIER_LIMIT) {
+    return NextResponse.json({
+      error: 'usage_limit_reached',
+      message: `You have used all ${FREE_TIER_LIMIT} free applications this month. Upgrade to Pro for unlimited applications.`,
+    }, { status: 402 })
+  }
+
+  // 4. Create application record
+  const { data: application, error: appError } = await admin
     .from('applications')
     .insert({
       user_id: user.id,
-      job_title: parsed.data.job_title,
-      company_name: parsed.data.company_name,
-      job_description: parsed.data.job_description,
-      job_url: parsed.data.job_url || null,
-      hiring_manager_name: parsed.data.hiring_manager_name || null,
-      documents_requested: parsed.data.documents_requested,
-      cover_letter_length: parsed.data.cover_letter_length,
-      cover_letter_max_words: parsed.data.cover_letter_max_words ?? null,
-      tone: parsed.data.tone,
+      job_title: body.job_title,
+      company_name: body.company_name,
+      job_description: body.job_description,
+      job_url: body.job_url ?? null,
+      hiring_manager_name: body.hiring_manager_name ?? null,
+      documents_requested: body.documents_requested,
+      cover_letter_length: body.cover_letter_length ?? 'standard',
+      cover_letter_max_words: body.cover_letter_max_words ?? null,
+      tone: body.tone,
+      status: 'pending',
+      application_status: 'saved',
     })
-    .select()
+    .select('id')
     .single()
 
-  if (error) {
+  if (appError || !application) {
     return NextResponse.json({ error: 'Failed to create application' }, { status: 500 })
   }
 
-  return NextResponse.json(application, { status: 201 })
+  // 5. Create pending document rows (one per requested document type)
+  const documentRows = body.documents_requested.map((type: DocumentType) => ({
+    application_id: application.id,
+    user_id: user.id,
+    type,
+    status: 'pending',
+    version: 1,
+  }))
+
+  await admin.from('documents').insert(documentRows)
+
+  // 6. Increment usage counter (upsert)
+  await admin.from('usage').upsert({
+    user_id: user.id,
+    period: periodStr,
+    applications_generated: usageCount + 1,
+  }, { onConflict: 'user_id,period' })
+
+  // 7. Fire n8n webhook (async — do not await full completion)
+  const webhookUrl = process.env.N8N_GENERATION_WEBHOOK_URL
+  if (webhookUrl) {
+    fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.N8N_WEBHOOK_SECRET}`,
+      },
+      body: JSON.stringify({
+        application_id: application.id,
+        user_id: user.id,
+      }),
+    }).catch(err => console.error('n8n webhook fire failed:', err))
+  }
+
+  // 8. Return application ID immediately
+  return NextResponse.json({ application_id: application.id }, { status: 201 })
 }
 
 export async function GET(request: Request) {
   const supabase = await createClient()
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  if (!user || authError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   const { searchParams } = new URL(request.url)
-  const statusFilter = searchParams.get('status')
-  const applicationStatusFilter = searchParams.get('application_status')
+  const limit = Math.min(parseInt(searchParams.get('limit') ?? '25'), 100)
+  const offset = parseInt(searchParams.get('offset') ?? '0')
+  const applicationStatus = searchParams.get('application_status')
+  const documentStatus = searchParams.get('document_status')
 
   let query = supabase
     .from('applications')
-    .select('*')
+    .select('id, job_title, company_name, status, application_status, documents_requested, created_at, updated_at', { count: 'exact' })
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
-  if (statusFilter) {
-    query = query.eq('status', statusFilter)
-  }
+  if (applicationStatus) query = query.eq('application_status', applicationStatus)
+  if (documentStatus) query = query.eq('status', documentStatus)
 
-  if (applicationStatusFilter) {
-    query = query.eq('application_status', applicationStatusFilter)
-  }
-
-  const { data: applications, error } = await query
+  const { data: applications, count, error } = await query
 
   if (error) {
     return NextResponse.json({ error: 'Failed to fetch applications' }, { status: 500 })
   }
 
-  return NextResponse.json(applications)
+  return NextResponse.json({
+    applications: applications ?? [],
+    total: count ?? 0,
+    has_more: (offset + limit) < (count ?? 0),
+  })
 }
