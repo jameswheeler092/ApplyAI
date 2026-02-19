@@ -130,7 +130,10 @@ export type Database = {
           headline: string | null
           hobbies_interests: string | null
           id: string
+          linkedin_url: string | null
+          location: string | null
           onboarding_complete: boolean | null
+          phone: string | null
           preferred_tone: string | null
           skills_experiences: Json | null
           summary: string | null
@@ -151,7 +154,10 @@ export type Database = {
           headline?: string | null
           hobbies_interests?: string | null
           id?: string
+          linkedin_url?: string | null
+          location?: string | null
           onboarding_complete?: boolean | null
+          phone?: string | null
           preferred_tone?: string | null
           skills_experiences?: Json | null
           summary?: string | null
@@ -172,7 +178,10 @@ export type Database = {
           headline?: string | null
           hobbies_interests?: string | null
           id?: string
+          linkedin_url?: string | null
+          location?: string | null
           onboarding_complete?: boolean | null
+          phone?: string | null
           preferred_tone?: string | null
           skills_experiences?: Json | null
           summary?: string | null
