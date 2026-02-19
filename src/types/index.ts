@@ -43,6 +43,9 @@ export interface Profile {
   user_id: string
   full_name: string | null
   headline: string | null
+  phone: string | null
+  linkedin_url: string | null
+  location: string | null
   summary: string | null
   work_history: WorkHistoryEntry[]
   education: EducationEntry[]
