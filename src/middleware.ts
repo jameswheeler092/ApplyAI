@@ -9,13 +9,9 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
+        getAll() { return request.cookies.getAll() },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          )
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
           supabaseResponse = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
@@ -26,20 +22,42 @@ export async function middleware(request: NextRequest) {
   )
 
   const { data: { user } } = await supabase.auth.getUser()
-
   const { pathname } = request.nextUrl
 
-  // Redirect unauthenticated users away from protected routes
-  const protectedRoutes = ['/dashboard', '/apply', '/applications', '/profile', '/settings', '/onboarding']
-  const isProtected = protectedRoutes.some(r => pathname.startsWith(r))
+  const isAuthPage = pathname.startsWith('/auth/')
+  const isOnboarding = pathname.startsWith('/onboarding')
+  const isProtectedApp = ['/dashboard', '/apply', '/applications', '/profile', '/settings']
+    .some(r => pathname.startsWith(r))
 
-  if (!user && isProtected) {
+  // Not logged in — block access to app and onboarding routes
+  if (!user && (isProtectedApp || isOnboarding)) {
     return NextResponse.redirect(new URL('/auth/login', request.url))
   }
 
-  // Redirect authenticated users away from auth pages
-  if (user && (pathname.startsWith('/auth/login') || pathname.startsWith('/auth/signup'))) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+  if (user) {
+    // Fetch onboarding_complete flag only — single lightweight column
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('onboarding_complete')
+      .eq('user_id', user.id)
+      .single()
+
+    const onboardingComplete = profile?.onboarding_complete ?? false
+
+    // Onboarding done — redirect away from auth pages and onboarding
+    if (onboardingComplete && (isAuthPage || isOnboarding)) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+
+    // Onboarding NOT done — redirect app pages to onboarding
+    if (!onboardingComplete && isProtectedApp) {
+      return NextResponse.redirect(new URL('/onboarding/step-1', request.url))
+    }
+
+    // Onboarding NOT done — redirect auth pages to onboarding
+    if (!onboardingComplete && isAuthPage) {
+      return NextResponse.redirect(new URL('/onboarding/step-1', request.url))
+    }
   }
 
   return supabaseResponse
