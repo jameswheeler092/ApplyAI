@@ -1,6 +1,11 @@
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
+function getResendClient() {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY is not set')
+  }
+  return new Resend(process.env.RESEND_API_KEY)
+}
 
 export async function sendDocumentsReadyEmail({
   to,
@@ -17,7 +22,7 @@ export async function sendDocumentsReadyEmail({
 }) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://applyai.app'
 
-  return resend.emails.send({
+  return getResendClient().emails.send({
     from: 'ApplyAI <noreply@yourdomain.com>', // update with verified domain
     to,
     subject: `Your documents for ${jobTitle} at ${companyName} are ready`,
